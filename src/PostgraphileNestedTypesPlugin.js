@@ -187,7 +187,9 @@ module.exports = function PostGraphileNestedTypesPlugin(
     pgNestedPluginReverseInputTypes[table.id] = [];
 
     foreignKeyConstraints.forEach((constraint) => {
-      const isForward = constraint.classId === table.id;
+      const isForward =
+        constraint.classId === table.id &&
+        constraint.classId !== constraint.foreignClassId;
       const foreignTable = isForward
         ? introspectionResultsByKind.classById[constraint.foreignClassId]
         : introspectionResultsByKind.classById[constraint.classId];
