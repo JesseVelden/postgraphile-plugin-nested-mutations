@@ -32,6 +32,18 @@ module.exports = function PostGraphileNestedTypesPlugin(
           `${tagName || name}_${foreignTable.name}_create_input`,
         );
       },
+      nestedUpsertInputType(options) {
+        const {
+          constraint: {
+            name,
+            tags: { name: tagName },
+          },
+          foreignTable,
+        } = options;
+        return inflection.upperCamelCase(
+          `${tagName || name}_${foreignTable.name}_upsert_input`,
+        );
+      },
     }),
   );
 
@@ -237,6 +249,13 @@ module.exports = function PostGraphileNestedTypesPlugin(
         isForward,
       });
 
+      const upsertInputTypeName = inflection.nestedUpsertInputType({
+        constraint,
+        table,
+        foreignTable,
+        isForward,
+      });
+
       const connectorTypeName = inflection.nestedConnectorType({
         constraint,
         table,
@@ -327,6 +346,52 @@ module.exports = function PostGraphileNestedTypesPlugin(
                   pgNestedForeignInflection: foreignTable,
                 },
               );
+
+              if (pgNestedTableUpdaterFields[table.id][constraint.id]) {
+                const upsertInputType = newWithHooks(
+                  GraphQLInputObjectType,
+                  {
+                    name: upsertInputTypeName,
+                    description: `The \`${foreignTableName}\` to be created or updated by this mutation.`,
+                    fields: () => {
+                      const upsertOperations = {};
+
+                      pgNestedTableUpdaterFields[table.id][
+                        constraint.id
+                      ].forEach(({ fieldName: updaterFieldName }) => {
+                        upsertOperations[updaterFieldName] =
+                          operations[updaterFieldName];
+                      });
+
+                      upsertOperations.create = {
+                        description: `A \`${
+                          gqlForeignTableType.name
+                        }\` object that will be created and connected to this object.`,
+                        type: createInputType,
+                      };
+
+                      return upsertOperations;
+                    },
+                  },
+                  {
+                    isNestedMutationInputType: true,
+                    isNestedMutationUpsertInputType: true,
+                    isNestedMutationUpsertByNodeIdType: true,
+                    isNestedInverseMutation: !isForward,
+                    pgInflection: table,
+                    pgNestedForeignInflection: foreignTable,
+                  },
+                );
+
+                operations.upsert = {
+                  description: `A \`${
+                    gqlForeignTableType.name
+                  }\` object that will be either created and connected to this object or updated.`,
+                  type: isForward
+                    ? upsertInputType
+                    : new GraphQLList(new GraphQLNonNull(upsertInputType)),
+                };
+              }
 
               operations.create = {
                 description: `A \`${
