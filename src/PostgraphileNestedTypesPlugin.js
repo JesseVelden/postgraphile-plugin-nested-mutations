@@ -157,7 +157,6 @@ module.exports = function PostGraphileNestedTypesPlugin(
         GraphQLList,
         GraphQLNonNull,
         GraphQLBoolean,
-        getNullableType,
       },
     } = build;
 
