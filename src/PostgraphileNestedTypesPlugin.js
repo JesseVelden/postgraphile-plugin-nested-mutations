@@ -1,6 +1,3 @@
-const debugFactory = require('debug');
-
-const debug = debugFactory('postgraphile-plugin-nested-mutations');
 module.exports = function PostGraphileNestedTypesPlugin(
   builder,
   {
@@ -364,21 +361,13 @@ module.exports = function PostGraphileNestedTypesPlugin(
                       const omittedFields = constraint.keyAttributes.map((k) =>
                         inflection.column(k),
                       );
-                      const primaryKeys = foreignTable.primaryKeyConstraint.keyAttributes.map(
-                        (key) => key.name,
-                      );
                       return Object.keys(inputFields)
                         .filter((key) => !omittedFields.includes(key)) //! omittedFields.includes(key)
                         .map((k) =>
                           Object.assign(
                             {},
                             {
-                              [k]: {
-                                ...inputFields[k],
-                                type: primaryKeys.includes(inputFields[k].name)
-                                  ? GraphQLNonNull(inputFields[k].type)
-                                  : getNullableType(inputFields[k].type),
-                              },
+                              [k]: inputFields[k],
                             },
                           ),
                         )
