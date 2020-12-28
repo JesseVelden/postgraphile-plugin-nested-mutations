@@ -1,3 +1,6 @@
+const debugFactory = require('debug');
+
+const debug = debugFactory('postgraphile-plugin-nested-mutations');
 module.exports = function PostGraphileNestedTypesPlugin(
   builder,
   {
@@ -157,6 +160,7 @@ module.exports = function PostGraphileNestedTypesPlugin(
         GraphQLList,
         GraphQLNonNull,
         GraphQLBoolean,
+        getNullableType,
       },
     } = build;
 
@@ -356,23 +360,29 @@ module.exports = function PostGraphileNestedTypesPlugin(
                     name: upsertInputTypeName,
                     description: `The \`${foreignTableName}\` to be created or updated by this mutation.`,
                     fields: () => {
-                      const upsertOperations = {};
-
-                      pgNestedTableUpdaterFields[table.id][
-                        constraint.id
-                      ].forEach(({ fieldName: updaterFieldName }) => {
-                        upsertOperations[updaterFieldName] =
-                          operations[updaterFieldName];
-                      });
-
-                      upsertOperations.create = {
-                        description: `A \`${
-                          gqlForeignTableType.name
-                        }\` object that will be created and connected to this object.`,
-                        type: createInputType,
-                      };
-
-                      return upsertOperations;
+                      const inputFields = gqlForeignTableType._fields;
+                      const omittedFields = constraint.keyAttributes.map((k) =>
+                        inflection.column(k),
+                      );
+                      const primaryKeys = foreignTable.primaryKeyConstraint.keyAttributes.map(
+                        (key) => key.name,
+                      );
+                      return Object.keys(inputFields)
+                        .filter((key) => !omittedFields.includes(key)) //! omittedFields.includes(key)
+                        .map((k) =>
+                          Object.assign(
+                            {},
+                            {
+                              [k]: {
+                                ...inputFields[k],
+                                type: primaryKeys.includes(inputFields[k].name)
+                                  ? GraphQLNonNull(inputFields[k].type)
+                                  : getNullableType(inputFields[k].type),
+                              },
+                            },
+                          ),
+                        )
+                        .reduce((res, o) => Object.assign(res, o), {});
                     },
                   },
                   {

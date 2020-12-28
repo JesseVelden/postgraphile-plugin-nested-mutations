@@ -282,6 +282,10 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
         if (isPgCreateMutationField) {
           const sqlColumns = [];
           const sqlValues = [];
+          const primaryKeys = table.primaryKeyConstraint.keyAttributes.map(
+            (key) => key.name,
+          );
+          // console.log('DA PRIMARY KEYS::::', primaryKeys);
           table.attributes
             .filter((attr) => pgColumnFilter(attr, build, context))
             .filter((attr) => !omit(attr, 'create'))
@@ -293,7 +297,14 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
                 sqlValues.push(gql2pg(val, attr.type, attr.typeModifier));
               }
             });
-          /* eslint indent: 0 */
+          const upsertConflictArray = sqlColumns
+            .map((column) => {
+              const columnName = sql.identifier(column.names[0]);
+              return primaryKeys.includes(columnName.names[0])
+                ? null
+                : sql.query`${columnName} = excluded.${columnName}`;
+            })
+            .filter((_) => _); // Filter out null values
           mutationQuery = sql.query`
             insert into ${sql.identifier(table.namespace.name, table.name)}
               ${
@@ -302,12 +313,14 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
                     ${sql.join(sqlColumns, ', ')}
                   ) values(${sql.join(sqlValues, ', ')})`
                   : sql.fragment`default values`
-              } ${
-            // eslint-disable-next-line no-underscore-dangle
-            input._isUpsert
-              ? sql.fragment`on conflict do nothing`
-              : sql.fragment``
-          } returning * `;
+              } ${input.upsert &&
+            sql.fragment`on conflict (${sql.join(
+              primaryKeys.map((key) => sql.identifier(key)),
+              ', ',
+            )}) do update set ${sql.join(
+              upsertConflictArray,
+              ', ',
+            )}`} returning * `;
         } else if (isPgUpdateMutationField) {
           const sqlColumns = [];
           const sqlValues = [];
@@ -388,6 +401,7 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
         }
 
         const { text, values } = sql.compile(mutationQuery);
+        console.log(text);
         const { rows } = await pgClient.query(text, values);
         const row = rows[0];
 
@@ -530,9 +544,11 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
                 }),
             );
 
-            if (fieldValue.create) {
+            if (fieldValue.create || fieldValue.upsert) {
+              const mapData = fieldValue.create || fieldValue.upsert;
+              const upserting = !!fieldValue.upsert;
               await Promise.all(
-                fieldValue.create.map(async (rowData) => {
+                mapData.map(async (rowData) => {
                   const resolver = pgNestedResolvers[foreignTable.id];
                   const tableVar = inflection.tableFieldName(foreignTable);
 
@@ -546,6 +562,7 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
                     data,
                     {
                       input: {
+                        upsert: upserting,
                         [tableVar]: Object.assign({}, rowData, keyData),
                       },
                     },
@@ -561,97 +578,6 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
                   }
                   modifiedRows.push(rowKeyValues);
                 }),
-              );
-            }
-            if (fieldValue.upsert) {
-              await Promise.all(
-                fieldValue.upsert.flatMap((rowData) =>
-                  Object.entries(rowData).map(async ([rowKey, rowValue]) => {
-                    // running updates first
-                    const updates = await Promise.all(
-                      pgNestedTableUpdaterFields[table.id][constraint.id]
-                        .filter((f) => f.fieldName === rowKey)
-                        .flatMap(async (connectorField) => {
-                          if (rowValue === null) return [];
-
-                          const updaterField = Array.isArray(rowValue)
-                            ? rowValue
-                            : [rowValue];
-
-                          return Promise.all(
-                            updaterField.map(async (node) => {
-                              const where = sql.fragment`
-                            ${sql.join(
-                              keys.map(
-                                (k, i) =>
-                                  sql.fragment`${sql.identifier(
-                                    k.name,
-                                  )} = ${sql.value(row[foreignKeys[i].name])}`,
-                              ),
-                              ') and (',
-                            )}
-                          `;
-                              const updatedRow = await pgNestedTableUpdate({
-                                nestedField,
-                                connectorField,
-                                input: node,
-                                pgClient,
-                                context,
-                                where,
-                              });
-
-                              if (updatedRow) {
-                                if (primaryKeys) {
-                                  const rowKeyValues = {};
-                                  primaryKeys.forEach((k) => {
-                                    rowKeyValues[k.name] = updatedRow[k.name];
-                                  });
-                                  modifiedRows.push(rowKeyValues);
-                                }
-
-                                return true;
-                              }
-                              // TODO: do something to prevent deletion ?
-
-                              return false;
-                            }),
-                          );
-                        }),
-                    );
-
-                    // No updates ran ? Then create!
-                    if (!updates.some((u) => u)) {
-                      const resolver = pgNestedResolvers[foreignTable.id];
-                      const tableVar = inflection.tableFieldName(foreignTable);
-
-                      const keyData = {};
-                      keys.forEach((k, idx) => {
-                        const columnName = inflection.column(k);
-                        keyData[columnName] = row[foreignKeys[idx].name];
-                      });
-
-                      const { data: reverseRow } = await resolver(
-                        data,
-                        {
-                          input: {
-                            _isUpsert: true,
-                            [tableVar]: Object.assign({}, rowValue, keyData),
-                          },
-                        },
-                        { pgClient },
-                        resolveInfo,
-                      );
-
-                      const rowKeyValues = {};
-                      if (primaryKeys) {
-                        primaryKeys.forEach((k) => {
-                          rowKeyValues[k.name] = reverseRow[`__pk__${k.name}`];
-                        });
-                      }
-                      modifiedRows.push(rowKeyValues);
-                    }
-                  }),
-                ),
               );
             }
             if (fieldValue.deleteOthers) {
@@ -739,7 +665,7 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
           );
           mutationData = finalRows[0];
           // eslint-disable-next-line no-underscore-dangle
-        } else if (primaryKeyConstraint && input._isUpsert) {
+        } else if (primaryKeyConstraint && input.upsert) {
           const primaryKeyFields = primaryKeyConstraint.keyAttributes;
 
           const where = [];
