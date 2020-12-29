@@ -1,7 +1,3 @@
-const debugFactory = require('debug');
-
-const debug = debugFactory('postgraphile-plugin-nested-mutations');
-
 module.exports = function PostGraphileNestedMutationPlugin(builder) {
   builder.hook('GraphQLInputObjectType:fields', (fields, build, context) => {
     const {
@@ -128,6 +124,7 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
     ) => {
       const nestedFields = pgNestedPluginForwardInputTypes[table.id];
       const output = Object.assign({}, input);
+      if (!input) return;
       await Promise.all(
         nestedFields
           .filter((k) => input[k.name])
@@ -187,10 +184,6 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
               pgNestedTableUpdaterFields[table.id][constraint.id]
                 .filter((f) => fieldValue[f.fieldName])
                 .map(async (connectorField) => {
-                  console.log(
-                    'jeeeeee****************************',
-                    fieldValue[connectorField.fieldName],
-                  );
                   const row = await pgNestedTableUpdate({
                     nestedField,
                     connectorField,
@@ -263,6 +256,63 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
         resolveData,
         {},
       );
+
+      const createAndUpsertResolveHelper = async (options) => {
+        const {
+          inputData,
+          resolver,
+          batch,
+          upsert,
+          primaryKeys,
+          tableName,
+        } = options;
+
+        const modifiedRows = {};
+
+        if (batch) {
+          const { data: reverseRow } = await resolver(
+            data,
+            {
+              input: {
+                upsert: !!upsert,
+                [tableName]: inputData,
+              },
+            },
+            { pgClient },
+            resolveInfo,
+          );
+
+          if (primaryKeys) {
+            primaryKeys.forEach((k) => {
+              modifiedRows[k.name] = reverseRow[`__pk__${k.name}`];
+            });
+          }
+        } else {
+          await Promise.all(
+            inputData.map(async (row) => {
+              const { data: reverseRow } = await resolver(
+                data,
+                {
+                  input: {
+                    upsert: !!upsert,
+                    [tableName]: [row],
+                  },
+                },
+                { pgClient },
+                resolveInfo,
+              );
+
+              if (primaryKeys) {
+                primaryKeys.forEach((k) => {
+                  modifiedRows[k.name] = reverseRow[`__pk__${k.name}`];
+                });
+              }
+            }),
+          );
+        }
+
+        return modifiedRows;
+      };
 
       try {
         await pgClient.query('SAVEPOINT graphql_nested_mutation');
@@ -372,7 +422,6 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
                 ') and (',
               )})`;
             } catch (e) {
-              debug(e);
               throw e;
             }
           } else {
@@ -455,6 +504,7 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
               );
             }
 
+            // Check if we have fields for the nestedConnectorsPlugin
             await Promise.all(
               pgNestedTableConnectorFields[foreignTable.id]
                 .filter((f) => fieldValue[f.fieldName])
@@ -492,6 +542,7 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
                 }),
             );
 
+            // Check if we have fields for the nestedDeletersPlugin
             await Promise.all(
               pgNestedTableDeleterFields[foreignTable.id]
                 .filter((f) => fieldValue[f.fieldName])
@@ -516,6 +567,7 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
                 }),
             );
 
+            // Check if we have fields for the nestedUpdatersPlugin
             await Promise.all(
               pgNestedTableUpdaterFields[table.id][constraint.id]
                 .filter((f) => fieldValue[f.fieldName])
@@ -526,19 +578,20 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
                     ? fieldValue[connectorField.fieldName]
                     : [fieldValue[connectorField.fieldName]];
 
+                  const where = sql.fragment`
+                        (${sql.join(
+                          keys.map(
+                            (k, i) =>
+                              sql.fragment`${sql.identifier(
+                                k.name,
+                              )} = ${sql.value(row[foreignKeys[i].name])}`,
+                          ),
+                          ') and (',
+                        )}) 
+                      `;
+
                   await Promise.all(
                     updaterField.map(async (node) => {
-                      const where = sql.fragment`
-                    (${sql.join(
-                      keys.map(
-                        (k, i) =>
-                          sql.fragment`${sql.identifier(k.name)} = ${sql.value(
-                            row[foreignKeys[i].name],
-                          )}`,
-                      ),
-                      ') and (',
-                    )}) 
-                  `;
                       const updatedRow = await pgNestedTableUpdate({
                         nestedField,
                         connectorField,
@@ -564,43 +617,7 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
                 }),
             );
 
-            if (fieldValue.create || fieldValue.upsert) {
-              const children = fieldValue.create || fieldValue.upsert;
-
-              const resolver = pgNestedResolvers[foreignTable.id];
-              const tableVar = inflection.tableFieldName(foreignTable);
-
-              const keyDataForChildren = keys.reduce(
-                (accumulator, k, index) => ({
-                  ...accumulator,
-                  [inflection.column(k)]: row[foreignKeys[index].name],
-                }),
-                {},
-              );
-
-              const { data: reverseRow } = await resolver(
-                data,
-                {
-                  input: {
-                    upsert: !!fieldValue.upsert,
-                    [tableVar]: children.map((child) => ({
-                      ...child,
-                      ...keyDataForChildren,
-                    })),
-                  },
-                },
-                { pgClient },
-                resolveInfo,
-              );
-
-              const rowKeyValues = {};
-              if (primaryKeys) {
-                primaryKeys.forEach((k) => {
-                  rowKeyValues[k.name] = reverseRow[`__pk__${k.name}`];
-                });
-              }
-              modifiedRows.push(rowKeyValues);
-            }
+            // Otherwise continue with fields for this plugin
             if (fieldValue.deleteOthers) {
               if (!primaryKeys) {
                 throw new Error(
@@ -655,6 +672,93 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
               } = sql.compile(deleteQuery);
               await pgClient.query(deleteQueryText, deleteQueryValues);
             }
+
+            // Some helpers for create, upsert and batch methods
+            // Only create those methods if one of the fields is set.
+            if (
+              fieldValue.create ||
+              fieldValue.batchCreate ||
+              fieldValue.upsert ||
+              fieldValue.batchUpsert
+            ) {
+              const resolver = pgNestedResolvers[foreignTable.id];
+              const keyDataForChildren = keys.reduce(
+                (accumulator, k, index) => ({
+                  ...accumulator,
+                  [inflection.column(k)]: row[foreignKeys[index].name],
+                }),
+                {},
+              );
+              const tableName = inflection.tableFieldName(foreignTable);
+
+              if (fieldValue.create) {
+                const children = fieldValue.create;
+
+                const rowsChanged = await createAndUpsertResolveHelper({
+                  inputData: children.map((child) => ({
+                    ...child,
+                    ...keyDataForChildren,
+                  })),
+                  tableName,
+                  resolver,
+                  primaryKeys,
+                });
+
+                modifiedRows.push(rowsChanged);
+              }
+
+              if (fieldValue.upsert) {
+                const children = fieldValue.upsert;
+
+                const rowsChanged = await createAndUpsertResolveHelper({
+                  inputData: children.map((child) => ({
+                    ...child,
+                    ...keyDataForChildren,
+                  })),
+                  tableName,
+                  resolver,
+                  primaryKeys,
+                  upsert: true,
+                });
+
+                modifiedRows.push(rowsChanged);
+              }
+
+              if (fieldValue.batchCreate) {
+                const children = fieldValue.batchCreate;
+
+                const rowsChanged = await createAndUpsertResolveHelper({
+                  inputData: children.map((child) => ({
+                    ...child,
+                    ...keyDataForChildren,
+                  })),
+                  tableName,
+                  resolver,
+                  primaryKeys,
+                  batch: true,
+                });
+
+                modifiedRows.push(rowsChanged);
+              }
+
+              if (fieldValue.batchUpsert) {
+                const children = fieldValue.batchUpsert;
+
+                const rowsChanged = await createAndUpsertResolveHelper({
+                  inputData: children.map((child) => ({
+                    ...child,
+                    ...keyDataForChildren,
+                  })),
+                  tableName,
+                  resolver,
+                  primaryKeys,
+                  upsert: true,
+                  batch: true,
+                });
+
+                modifiedRows.push(rowsChanged);
+              }
+            }
           }),
         );
 
@@ -684,31 +788,6 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
             query,
           );
           mutationData = finalRows[0];
-          // eslint-disable-next-line no-underscore-dangle
-        } else if (primaryKeyConstraint && input.upsert) {
-          const primaryKeyFields = primaryKeyConstraint.keyAttributes;
-
-          const where = [];
-          primaryKeyFields.forEach((f) => {
-            const fieldName = inflection.column(f);
-            const val = inputData[fieldName];
-
-            where.push(sql.fragment`
-              ${sql.identifier(f.name)} = ${sql.value(val)}
-            `);
-          });
-
-          const finalRows = await viaTemporaryTable(
-            pgClient,
-            sql.identifier(table.namespace.name, table.name),
-            sql.query`
-              select * from ${sql.identifier(table.namespace.name, table.name)}
-              where ${sql.join(where, ' AND ')}
-            `,
-            insertedRowAlias,
-            query,
-          );
-          mutationData = finalRows[0];
         }
 
         return {
@@ -716,7 +795,6 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
           data: mutationData,
         };
       } catch (e) {
-        debug(e);
         await pgClient.query('ROLLBACK TO SAVEPOINT graphql_nested_mutation');
         throw e;
       } finally {

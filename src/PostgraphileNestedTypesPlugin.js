@@ -32,6 +32,18 @@ module.exports = function PostGraphileNestedTypesPlugin(
           `${tagName || name}_${foreignTable.name}_create_input`,
         );
       },
+      nestedBatchCreateInputType(options) {
+        const {
+          constraint: {
+            name,
+            tags: { name: tagName },
+          },
+          foreignTable,
+        } = options;
+        return inflection.upperCamelCase(
+          `${tagName || name}_${foreignTable.name}_create_batch_input`,
+        );
+      },
       nestedUpsertInputType(options) {
         const {
           constraint: {
@@ -42,6 +54,18 @@ module.exports = function PostGraphileNestedTypesPlugin(
         } = options;
         return inflection.upperCamelCase(
           `${tagName || name}_${foreignTable.name}_upsert_input`,
+        );
+      },
+      nestedBatchUpsertInputType(options) {
+        const {
+          constraint: {
+            name,
+            tags: { name: tagName },
+          },
+          foreignTable,
+        } = options;
+        return inflection.upperCamelCase(
+          `${tagName || name}_${foreignTable.name}_upsert_batch_input`,
         );
       },
     }),
@@ -194,7 +218,6 @@ module.exports = function PostGraphileNestedTypesPlugin(
         ? introspectionResultsByKind.classById[constraint.foreignClassId]
         : introspectionResultsByKind.classById[constraint.classId];
 
-      // istanbul ignore next
       if (!foreignTable) {
         throw new Error(
           `Could not find the foreign table (constraint: ${constraint.name})`,
@@ -251,7 +274,21 @@ module.exports = function PostGraphileNestedTypesPlugin(
         isForward,
       });
 
+      const createBatchInputTypeName = inflection.nestedBatchCreateInputType({
+        constraint,
+        table,
+        foreignTable,
+        isForward,
+      });
+
       const upsertInputTypeName = inflection.nestedUpsertInputType({
+        constraint,
+        table,
+        foreignTable,
+        isForward,
+      });
+
+      const upsertBatchInputTypeName = inflection.nestedBatchUpsertInputType({
         constraint,
         table,
         foreignTable,
@@ -324,21 +361,44 @@ module.exports = function PostGraphileNestedTypesPlugin(
               );
             }
             if (creatable) {
+              const inputFields = gqlForeignTableType._fields;
+              const omittedFields = constraint.keyAttributes.map((k) =>
+                inflection.column(k),
+              );
+              const nestedUpdateFields = Object.keys(inputFields)
+                .filter((key) => !omittedFields.includes(key)) //! omittedFields.includes(key)
+                .map((k) =>
+                  Object.assign(
+                    {},
+                    {
+                      [k]: inputFields[k],
+                    },
+                  ),
+                )
+                .reduce((res, o) => Object.assign(res, o), {});
+
               const createInputType = newWithHooks(
                 GraphQLInputObjectType,
                 {
                   name: createInputTypeName,
                   description: `The \`${foreignTableName}\` to be created by this mutation.`,
-                  fields: () => {
-                    const inputFields = gqlForeignTableType._fields;
-                    const omittedFields = constraint.keyAttributes.map((k) =>
-                      inflection.column(k),
-                    );
-                    return Object.keys(inputFields)
-                      .filter((key) => !omittedFields.includes(key))
-                      .map((k) => Object.assign({}, { [k]: inputFields[k] }))
-                      .reduce((res, o) => Object.assign(res, o), {});
-                  },
+                  fields: () => nestedUpdateFields,
+                },
+                {
+                  isNestedMutationInputType: true,
+                  isNestedMutationCreateInputType: true,
+                  isNestedInverseMutation: !isForward,
+                  pgInflection: table,
+                  pgNestedForeignInflection: foreignTable,
+                },
+              );
+
+              const createBatchInputType = newWithHooks(
+                GraphQLInputObjectType,
+                {
+                  name: createBatchInputTypeName,
+                  description: `An array of \`${foreignTableName}\` with all the same columns to be created by this mutation.`,
+                  fields: () => nestedUpdateFields,
                 },
                 {
                   isNestedMutationInputType: true,
@@ -355,23 +415,7 @@ module.exports = function PostGraphileNestedTypesPlugin(
                   {
                     name: upsertInputTypeName,
                     description: `The \`${foreignTableName}\` to be created or updated by this mutation.`,
-                    fields: () => {
-                      const inputFields = gqlForeignTableType._fields;
-                      const omittedFields = constraint.keyAttributes.map((k) =>
-                        inflection.column(k),
-                      );
-                      return Object.keys(inputFields)
-                        .filter((key) => !omittedFields.includes(key)) //! omittedFields.includes(key)
-                        .map((k) =>
-                          Object.assign(
-                            {},
-                            {
-                              [k]: inputFields[k],
-                            },
-                          ),
-                        )
-                        .reduce((res, o) => Object.assign(res, o), {});
-                    },
+                    fields: () => nestedUpdateFields,
                   },
                   {
                     isNestedMutationInputType: true,
@@ -391,6 +435,32 @@ module.exports = function PostGraphileNestedTypesPlugin(
                     ? upsertInputType
                     : new GraphQLList(new GraphQLNonNull(upsertInputType)),
                 };
+
+                const upsertBatchInputType = newWithHooks(
+                  GraphQLInputObjectType,
+                  {
+                    name: upsertBatchInputTypeName,
+                    description: `The \`${foreignTableName}\` to be created or updated by this mutation.`,
+                    fields: () => nestedUpdateFields,
+                  },
+                  {
+                    isNestedMutationInputType: true,
+                    isNestedMutationUpsertInputType: true,
+                    isNestedMutationUpsertByNodeIdType: true,
+                    isNestedInverseMutation: !isForward,
+                    pgInflection: table,
+                    pgNestedForeignInflection: foreignTable,
+                  },
+                );
+
+                operations.batchUpsert = {
+                  description: `An array of \`${
+                    gqlForeignTableType.name
+                  }\` with all the same columns that will be either created and connected to this object or updated.`,
+                  type: isForward
+                    ? upsertBatchInputType
+                    : new GraphQLList(new GraphQLNonNull(upsertBatchInputType)),
+                };
               }
 
               operations.create = {
@@ -400,6 +470,15 @@ module.exports = function PostGraphileNestedTypesPlugin(
                 type: isForward
                   ? createInputType
                   : new GraphQLList(new GraphQLNonNull(createInputType)),
+              };
+
+              operations.batchCreate = {
+                description: `A \`${
+                  gqlForeignTableType.name
+                }\` object that will be created and connected to this object.`,
+                type: isForward
+                  ? createBatchInputType
+                  : new GraphQLList(new GraphQLNonNull(createBatchInputType)),
               };
             }
             return operations;
