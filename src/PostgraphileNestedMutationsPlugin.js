@@ -336,12 +336,21 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
         if (isPgCreateMutationField) {
           // A batch upsert must have all records conforming to the first row from the array
           const spec = input[tableFieldName][0];
-          const specifiedAttributes = table.attributes.filter((attribute) =>
-            Object.prototype.hasOwnProperty.call(
-              spec,
-              inflection.column(attribute),
-            ),
-          );
+          const specifiedAttributes = [
+            ...new Set([
+              ...table.attributes.filter((attribute) =>
+                Object.prototype.hasOwnProperty.call(
+                  spec,
+                  inflection.column(attribute),
+                ),
+              ),
+              // if primary key(s) that have a default value are not in the first row, also add them to the spec.
+              // TODO check if it is really the only edge case
+              ...table.primaryKeyConstraint.keyAttributes.filter(
+                (attribute) => attribute.hasDefault,
+              ),
+            ]),
+          ];
           // Loop thru columns and "SQLify" them
           const sqlColumns = specifiedAttributes.map((attribute) =>
             sql.identifier(attribute.name),
@@ -349,11 +358,14 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
           const sqlRowValues = input[tableFieldName].map((inputRow) => {
             return specifiedAttributes.map((attribute) => {
               const key = inflection.column(attribute);
-              return gql2pg(
-                inputRow[key],
-                attribute.type,
-                attribute.typeModifier,
-              );
+              if (inputRow[key] !== undefined) {
+                return gql2pg(
+                  inputRow[key],
+                  attribute.type,
+                  attribute.typeModifier,
+                );
+              }
+              return sql.raw('default');
             });
           });
           const primaryKeys = table.primaryKeyConstraint.keyAttributes.map(
