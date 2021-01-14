@@ -235,13 +235,11 @@ module.exports = function PostGraphileNestedTypesPlugin(
         !omit(foreignTable, 'create') &&
         !omit(constraint, 'create') &&
         !constraint.keyAttributes.some((key) => omit(key, 'create'));
-      const updateable =
-        !omit(foreignTable, 'update') && !omit(constraint, 'update');
+      const updateable = !omit(foreignTable, 'update');
       const deleteable =
         nestedMutationsDeleteOthers &&
         foreignTable.primaryKeyConstraint &&
-        !omit(foreignTable, 'delete') &&
-        !omit(constraint, 'delete');
+        !omit(foreignTable, 'delete');
 
       if (
         (!connectable && !creatable && !deleteable && !updateable) ||
