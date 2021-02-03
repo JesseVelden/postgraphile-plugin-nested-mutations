@@ -1,13 +1,13 @@
 {
-  "name": "postgraphile-plugin-nested-mutations",
-  "version": "1.0.1",
+  "name": "@megacookie/postgraphile-plugin-nested-mutations",
+  "version": "1.0.2",
   "description": "Nested mutations plugin for PostGraphile",
   "main": "index.js",
   "repository": {
-    "url": "git+https://github.com/mlipscombe/postgraphile-plugin-nested-mutations.git",
+    "url": "git+https://github.com/MegaCookie/postgraphile-plugin-nested-mutations.git",
     "type": "git"
   },
-  "author": "Mark Lipscombe",
+  "author": "Jesse van der Velden",
   "license": "MIT",
   "bugs": {
     "url": "https://github.com/mlipscombe/postgraphile-plugin-nested-mutations/issues"

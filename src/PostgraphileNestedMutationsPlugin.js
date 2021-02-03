@@ -334,8 +334,11 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
         let mutationQuery = null;
 
         if (isPgCreateMutationField) {
-          // A batch upsert must have all records conforming to the first row from the array
-          const spec = input[tableFieldName][0];
+          // A batch upsert must have all records conforming to the first row from the array, or make it an array
+          const inputArray = Array.isArray(input[tableFieldName])
+            ? input[tableFieldName]
+            : [input[tableFieldName]];
+          const spec = inputArray[0];
           const specifiedAttributes = [
             ...new Set([
               ...table.attributes.filter((attribute) =>
@@ -355,7 +358,7 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
           const sqlColumns = specifiedAttributes.map((attribute) =>
             sql.identifier(attribute.name),
           );
-          const sqlRowValues = input[tableFieldName].map((inputRow) => {
+          const sqlRowValues = inputArray.map((inputRow) => {
             return specifiedAttributes.map((attribute) => {
               const key = inflection.column(attribute);
               if (inputRow[key] !== undefined) {
