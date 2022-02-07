@@ -1,17 +1,23 @@
-[![Package on npm](https://img.shields.io/npm/v/postgraphile-plugin-nested-mutations.svg)](https://www.npmjs.com/package/postgraphile-plugin-nested-mutations)
-[![CircleCI](https://circleci.com/gh/mlipscombe/postgraphile-plugin-nested-mutations/tree/master.svg?style=svg)](https://circleci.com/gh/mlipscombe/postgraphile-plugin-nested-mutations/tree/master)
+[![Package on npm](https://img.shields.io/npm/v/@megacookie/postgraphile-plugin-nested-mutations.svg)](https://www.npmjs.com/package/@megacookie/postgraphile-plugin-nested-mutations)
 
-# postgraphile-plugin-nested-mutations
+# @megacookie/postgraphile-plugin-nested-mutations
 This plugin implements nested mutations based on both forward and reverse foreign
 key relationships in PostGraphile v4.  Nested mutations can be of infinite depth.
+
+**My version adds (batch) creating and upserting features using `upsert`,  `batchCreate`, `batchUpsert` and allows you
+to `deleteOthers`, to delete existing rows (resulting replacing the rows the existing rows with the new rows that you 
+want to insert)**
+
 
 ## Getting Started
 
 ### CLI
 
 ``` bash
-postgraphile --append-plugins postgraphile-plugin-nested-mutations
+postgraphile --append-plugins @megacookie/postgraphile-plugin-nested-mutations
 ```
+
+or just add this to schemaPlugins in your config file if you're using Postgraphile in library mode.
 
 See [here](https://www.graphile.org/postgraphile/extending/#loading-additional-plugins) for
 more information about loading plugins with PostGraphile.
