@@ -95,8 +95,8 @@ module.exports = function PostGraphileNestedTypesPlugin(
           foreignTable,
         } = options;
         const tableFieldName = inflection.tableFieldName(foreignTable);
-        const keyNames = keys.map((k) => k.name);
-        const foreignKeyNames = foreignKeys.map((k) => k.name);
+        const keyNames = keys.map((k) => inflection.column(k));
+        const foreignKeyNames = foreignKeys.map((k) => inflection.column(k));
 
         const constraints = foreignTable.constraints
           .filter((con) => con.type === 'f')
@@ -358,7 +358,7 @@ module.exports = function PostGraphileNestedTypesPlugin(
                 },
               );
             }
-            if (creatable) {
+            if (creatable && gqlForeignTableType) {
               const inputFields = gqlForeignTableType._fields;
               const omittedFields = constraint.keyAttributes.map((k) =>
                 inflection.column(k),
@@ -374,7 +374,6 @@ module.exports = function PostGraphileNestedTypesPlugin(
                   ),
                 )
                 .reduce((res, o) => Object.assign(res, o), {});
-
               const createInputType = newWithHooks(
                 GraphQLInputObjectType,
                 {
@@ -462,9 +461,7 @@ module.exports = function PostGraphileNestedTypesPlugin(
               }
 
               operations.create = {
-                description: `A \`${
-                  gqlForeignTableType.name
-                }\` object that will be created and connected to this object.`,
+                description: `A \`${gqlForeignTableType.name}\` object that will be created and connected to this object.`,
                 type: isForward
                   ? createInputType
                   : new GraphQLList(new GraphQLNonNull(createInputType)),
