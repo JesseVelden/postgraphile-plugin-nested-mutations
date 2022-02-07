@@ -380,13 +380,13 @@ module.exports = function PostGraphileNestedMutationPlugin(builder) {
             sqlColumns.map((column) => {
               const name = column.names[0];
               const columnName = sql.identifier(name);
-              return sql.query`${columnName} = excluded.${columnName}`;
+              return sql.query`${columnName} = coalesce(excluded.${columnName}, t.${columnName})`;
             });
           mutationQuery = sql.query`
             insert into ${sql.identifier(table.namespace.name, table.name)}
               ${
                 sqlColumns.length
-                  ? sql.fragment`(
+                  ? sql.fragment`as t(
                     ${sql.join(sqlColumns, ', ')}
                   ) values ${sql.join(
                     sqlRowValues.map(
